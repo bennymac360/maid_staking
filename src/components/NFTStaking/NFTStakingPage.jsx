@@ -1,0 +1,1186 @@
+import React, {
+  useContext,
+  useState,
+  useEffect,
+  useRef
+} from 'react';
+import {
+  Box,
+  Typography,
+  CircularProgress,
+  Button,
+  Card,
+  CardMedia,
+  CardContent,
+  Checkbox,
+  FormControlLabel,
+  Snackbar,
+  Alert,
+  MenuItem,
+  Select,
+  InputLabel,
+  styled,
+  LinearProgress,
+  TextField,
+  Tooltip,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableRow,
+  Paper,
+  Grid, // <-- NEW: Import Grid for responsive card layout
+  useTheme // for breakpoint-based styling if needed
+} from '@mui/material';
+import { ethers } from 'ethers';
+import { BlockchainContext } from '../../contexts/BlockchainContext';
+
+/* 
+  ================================
+  =  0. Utility & Styled Helpers =
+  ================================
+*/
+
+/** formatSeconds: converts raw seconds -> "DDd HHh MMm SSs" */
+function formatSeconds(totalSeconds) {
+  let s = Number(totalSeconds);
+  const d = Math.floor(s / 86400);
+  s %= 86400;
+  const h = Math.floor(s / 3600);
+  s %= 3600;
+  const m = Math.floor(s / 60);
+  s = s % 60;
+  return `${d}d ${h}h ${m}m ${s}s`;
+}
+
+// For label & value styling in the table
+const TableLabel = styled(Typography)(() => ({
+  color: '#fff',
+  fontSize: '0.9rem'
+}));
+const TableValue = styled(Typography)(() => ({
+  color: '#00bfff',
+  fontSize: '0.9rem'
+}));
+
+// A small styled FormControl for the page size dropdown
+const StyledFormControl = styled('div')(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: theme.spacing(1)
+}));
+
+/**
+ * The authorized NFT contract for staking
+ */
+const AUTHORIZED_NFT_CONTRACT = '0x91123826D7102aa55922D988570802AFa617CfA0'.toLowerCase();
+
+/* 
+  =================================
+  =  1. Caching & Retry Utilities =
+  =================================
+*/
+
+/**
+ * Load any existing NFT metadata cache from localStorage
+ */
+function loadCacheFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem('nftMetadataCache');
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch (err) {
+    console.warn('Failed to parse NFT metadata cache:', err);
+    return {};
+  }
+}
+
+/** Save updated cache object back to localStorage */
+function saveCacheToLocalStorage(cacheObject) {
+  try {
+    localStorage.setItem('nftMetadataCache', JSON.stringify(cacheObject));
+  } catch (err) {
+    console.warn('Failed to save NFT metadata cache:', err);
+  }
+}
+
+/**
+ * Exponential backoff fetch wrapper
+ * Attempts up to `maxAttempts` times with increasing delays.
+ */
+async function fetchWithRetry(url, options = {}, maxAttempts = 3, attempt = 1) {
+  try {
+    const resp = await fetch(url, options);
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    return resp;
+  } catch (err) {
+    if (attempt >= maxAttempts) {
+      throw err;
+    }
+    // Wait (2^attempt * 100) ms
+    const delayMs = 100 * (2 ** attempt);
+    console.warn(`fetchWithRetry: attempt #${attempt} failed. Retrying in ${delayMs}ms...`);
+    await new Promise((r) => setTimeout(r, delayMs));
+    return fetchWithRetry(url, options, maxAttempts, attempt + 1);
+  }
+}
+
+/**
+ * Use local + in-memory caching for NFT metadata.
+ * Also uses retry logic in fetch.
+ */
+async function fetchTokenInstanceMetadata(contractAddr, tokenId, metadataCacheRef) {
+  const cacheKey = `${contractAddr}-${tokenId}`;
+
+  // 1) Check in-memory cache
+  if (metadataCacheRef.current[cacheKey]) {
+    return metadataCacheRef.current[cacheKey];
+  }
+
+  // 2) Check localStorage cache
+  const storedCache = loadCacheFromLocalStorage();
+  if (storedCache[cacheKey]) {
+    metadataCacheRef.current[cacheKey] = storedCache[cacheKey];
+    return storedCache[cacheKey];
+  }
+
+  // 3) Not found => fetch from Explorer with retry
+  const url = `https://flare-explorer.flare.network/api/v2/tokens/${contractAddr}/instances/${tokenId}`;
+  try {
+    const resp = await fetchWithRetry(url, { method: 'GET', headers: { accept: 'application/json' } }, 3);
+    const data = await resp.json();
+
+    const imageUrl = data.image_url || data.media_url || null;
+    const meta = data.metadata || null;
+    const symbol = data.token?.symbol || null;
+
+    const fetchedData = {
+      contractAddress: contractAddr,
+      tokenId,
+      image_url: imageUrl,
+      metadata: meta,
+      tokenSymbol: symbol,
+      is_unique: data.is_unique || false
+    };
+
+    // Cache in memory + localStorage
+    metadataCacheRef.current[cacheKey] = fetchedData;
+    storedCache[cacheKey] = fetchedData;
+    saveCacheToLocalStorage(storedCache);
+
+    return fetchedData;
+  } catch (err) {
+    console.warn(`fetchTokenInstanceMetadata error for ${tokenId}:`, err);
+    // fallback
+    const fallbackData = {
+      contractAddress: contractAddr,
+      tokenId,
+      image_url: null,
+      metadata: null,
+      tokenSymbol: null
+    };
+    metadataCacheRef.current[cacheKey] = fallbackData;
+    storedCache[cacheKey] = fallbackData;
+    saveCacheToLocalStorage(storedCache);
+    return fallbackData;
+  }
+}
+
+/* 
+  ==========================
+  =  2. On-Chain Fetchers  =
+  ==========================
+*/
+async function fetchUnstakedNftsWithMultiplier(userAddress, nftStakingContract, signer, metadataCacheRef) {
+  // 1) Query the explorer for all user-owned (unstaked) items
+  const baseUrl = `https://flare-explorer.flare.network/api/v2/addresses/${userAddress}/nft?type=ERC-721`;
+  let currentUrl = baseUrl;
+  const allItems = [];
+
+  try {
+    while (true) {
+      const resp = await fetchWithRetry(currentUrl, { method: 'GET', headers: { accept: 'application/json' } }, 3);
+      if (!resp.ok) {
+        throw new Error(`Failed to fetch user NFTs (unstaked): HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
+      const items = data.items || [];
+      if (items.length === 0) {
+        break;
+      }
+      allItems.push(...items);
+
+      const npp = data.next_page_params;
+      if (!npp) break;
+
+      const { token_contract_address_hash, token_id, token_type } = npp;
+      if (!token_contract_address_hash || !token_id || !token_type) break;
+
+      currentUrl = `${baseUrl}&token_contract_address_hash=${token_contract_address_hash}&token_id=${token_id}&token_type=${token_type}`;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+  } catch (err) {
+    console.error('fetchUnstakedNftsWithMultiplier error:', err);
+    return [];
+  }
+
+  // 2) Filter only for AUTHORIZED_NFT_CONTRACT
+  const filtered = allItems.filter((item) => {
+    const cAddr = item.token?.address?.toLowerCase();
+    return cAddr === AUTHORIZED_NFT_CONTRACT;
+  });
+
+  // 3) For each NFT, fetch metadata + on-chain multiplier
+  const results = [];
+  const erc721Abi = ['function tokenMultiplier(uint256) view returns (uint256)'];
+  const readContract = new ethers.Contract(nftStakingContract.address, erc721Abi, signer || nftStakingContract.signer);
+
+  for (const item of filtered) {
+    const tokenId = item.id;
+    try {
+      const instanceData = await fetchTokenInstanceMetadata(AUTHORIZED_NFT_CONTRACT, tokenId, metadataCacheRef);
+
+      const rawMultBN = await readContract.tokenMultiplier(tokenId);
+      const rawMult = rawMultBN ? rawMultBN.toString() : '0';
+      const multiplier = rawMult === '0' ? '1' : rawMult;
+
+      results.push({
+        ...instanceData,
+        multiplier
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    } catch (err) {
+      console.warn(`Error fetching metadata/multiplier for token #${tokenId}`, err);
+    }
+  }
+
+  return results;
+}
+
+/* 
+  ============================
+  =  3. NFT Checkbox + Card  =
+  ============================
+*/
+
+/**
+ * Lazy-loaded card with fallback image handling + search-friendly data attributes
+ */
+function NFTCheckboxCard({
+  nft,
+  selected,
+  onSelectChange,
+  isStaked = false,
+  multiplier = '0',
+  unclaimed = '0'
+}) {
+  const { tokenId, image_url, metadata } = nft;
+  const nftName = metadata?.name || `Token #${tokenId}`;
+
+  // fallback image if image_url is null
+  const displayImage = image_url || 'https://via.placeholder.com/300';
+
+  // Simple error handler for the <img>
+  const handleImageError = (e) => {
+    e.target.src = 'https://via.placeholder.com/300?text=Image+Unavailable';
+  };
+
+  return (
+    <Card
+      data-token-id={tokenId} // for searching/filtering
+      aria-label={`NFT card for token #${tokenId}`}
+      sx={{
+        // Remove maxWidth so it can scale in a responsive grid
+        width: '100%',
+        minWidth: 280,
+        backgroundColor: '#1e1e1e',
+        color: '#fff',
+        // Use breakpoints to soften shadows on smaller devices
+        boxShadow: {
+          xs: '0 0 10px rgba(0,191,255,0.3)',
+          sm: '0 0 20px 5px rgba(0,191,255,0.4)',
+          md: '0 0 20px 5px rgba(0,191,255,0.6)'
+        },
+        borderRadius: '10px',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between'
+      }}
+    >
+      {displayImage && (
+        <CardMedia
+          component="img"
+          // Set a responsive height—auto on smaller screens
+          sx={{
+            width: '100%',
+            height: { xs: 'auto', sm: 200 },
+            objectFit: 'cover'
+          }}
+          image={displayImage}
+          alt={`NFT #${tokenId}`}
+          loading="lazy"
+          onError={handleImageError}
+        />
+      )}
+      <CardContent sx={{ textAlign: 'center', p: 1 }}>
+        <Typography variant="subtitle1" sx={{ color: '#00bfff', mb: 0.5 }} aria-label="NFT name">
+          {nftName}
+        </Typography>
+        <Tooltip title="Multiplier determines how much reward this NFT receives relative to others.">
+          <Typography variant="body2" sx={{ color: '#ccc' }} aria-label="Multiplier">
+            Multiplier: {multiplier}
+          </Typography>
+        </Tooltip>
+        {isStaked && (
+          <Tooltip title="Unclaimed rewards for this specific NFT.">
+            <Typography variant="body2" sx={{ color: '#ccc' }}>
+              Unclaimed:
+            </Typography>
+            <Typography variant="body2" sx={{ color: '#ccc', mb: 1 }}>
+              {parseFloat(unclaimed).toFixed(5)} FOTON
+            </Typography>
+          </Tooltip>
+        )}
+
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={selected}
+              onChange={(e) => onSelectChange(tokenId, e.target.checked)}
+              sx={{ color: '#00bfff', '&.Mui-checked': { color: '#00bfff' } }}
+            />
+          }
+          label={isStaked ? 'Unstake' : 'Stake'}
+          sx={{ color: '#fff', mt: 1 }}
+          aria-label={isStaked ? `Unstake Token #${tokenId}` : `Stake Token #${tokenId}`}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+/* 
+  =====================
+  =  4. Main Page App =
+  =====================
+*/
+
+export default function NFTStakingPage() {
+  const { account, nftStakingContract, signer, provider } = useContext(BlockchainContext);
+
+  // Loading states
+  const [loading, setLoading] = useState(false);
+  const [loadingBatch, setLoadingBatch] = useState(false);
+
+  // On-chain user data, global data
+  const [userData, setUserData] = useState(null);
+  const [globalData, setGlobalData] = useState(null);
+
+  // We define a small local state for the table page *here*, at top-level
+  const [tablePage, setTablePage] = useState(1);
+  const totalPages = 3;
+
+  // Admin / Owner check
+  const [isOwner, setIsOwner] = useState(false);
+
+  // Unstaked vs staked items
+  const [unstakedNfts, setUnstakedNfts] = useState([]);
+  const [stakedNfts, setStakedNfts] = useState([]);
+
+  // Selections
+  const [selectedToStake, setSelectedToStake] = useState([]);
+  const [selectedToUnstake, setSelectedToUnstake] = useState([]);
+
+  // Pagination
+  // We'll keep staked and unstaked pagination separate
+  const [stakedPageSize, setStakedPageSize] = useState(4);
+  const [unstakedPageSize, setUnstakedPageSize] = useState(4);
+
+  const [stakedPage, setStakedPage] = useState(1);
+  const [unstakedPage, setUnstakedPage] = useState(1);
+
+  // Search / Filter states
+  const [unstakedSearchTerm, setUnstakedSearchTerm] = useState('');
+  const [stakedSearchTerm, setStakedSearchTerm] = useState('');
+
+  // Sort state: can be 'multiplier', 'name', or 'tokenId'
+  const [unstakedSort, setUnstakedSort] = useState('multiplier');
+  const [stakedSort, setStakedSort] = useState('multiplier');
+
+  // Snackbar
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  const handleCloseSnackbar = () => setSnackbar((prev) => ({ ...prev, open: false }));
+  const showMessage = (msg, severity = 'info') => {
+    setSnackbar({ open: true, message: msg, severity });
+  };
+
+  // In-memory caching for NFT metadata
+  const metadataCacheRef = useRef({});
+
+  // For token price -> USD conversion (placeholder)
+  const [usdRate, setUsdRate] = useState(0.5); // "1 RewardToken = $0.5" (example)
+
+  //======================== LOAD DATA ========================
+  async function loadData() {
+    if (!account || !nftStakingContract) return;
+    setLoading(true);
+
+    try {
+      // 1) Global data (epoch info, budgets, etc.)
+      const global = await nftStakingContract.getAllGlobalData();
+      setGlobalData(global);
+
+      // 2) getAllDataForUser => userData
+      const data = await nftStakingContract.getAllDataForUser(account);
+      setUserData(data);
+
+      // 3) Check if user is the owner
+      const ownerAddr = await nftStakingContract.owner();
+      setIsOwner(ownerAddr.toLowerCase() === account.toLowerCase());
+
+      // 4) STAKED items
+      const stakedArr = [];
+      for (let i = 0; i < data.stakedTokenIds.length; i++) {
+        const rawId = data.stakedTokenIds[i].toString();
+        const rawMultiplier = data.tokenMultipliers[i].toString();
+        const unclaimedWei = data.tokenUnclaimedRewards[i];
+        const unclaimedEther = ethers.utils.formatEther(unclaimedWei || '0');
+
+        const instanceMeta = await fetchTokenInstanceMetadata(
+          AUTHORIZED_NFT_CONTRACT,
+          rawId,
+          metadataCacheRef
+        );
+
+        stakedArr.push({
+          ...instanceMeta,
+          multiplier: rawMultiplier,
+          unclaimed: unclaimedEther
+        });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+
+      // 5) UNSTAKED items => from explorer
+      const unstakedArr = await fetchUnstakedNftsWithMultiplier(
+        account,
+        nftStakingContract,
+        signer || provider,
+        metadataCacheRef
+      );
+
+      // 6) Sort both arrays by default => multiplier desc
+      stakedArr.sort((a, b) => Number(b.multiplier) - Number(a.multiplier));
+      unstakedArr.sort((a, b) => Number(b.multiplier) - Number(a.multiplier));
+
+      // 7) Update states
+      setStakedNfts(stakedArr);
+      setUnstakedNfts(unstakedArr);
+      setSelectedToStake([]);
+      setSelectedToUnstake([]);
+    } catch (err) {
+      console.error('loadData error:', err);
+      showMessage(`Error loading data: ${err.message}`, 'error');
+    }
+
+    setLoading(false);
+  }
+
+  // Initial load
+  useEffect(() => {
+    if (account && nftStakingContract) {
+      loadData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, nftStakingContract]);
+
+  //======================== APPROVAL ========================
+  async function ensureApprovedForAll() {
+    if (!signer || !account) return;
+    const erc721Abi = [
+      'function isApprovedForAll(address owner, address operator) view returns (bool)',
+      'function setApprovalForAll(address operator, bool approved) external'
+    ];
+    const nftContract = new ethers.Contract(AUTHORIZED_NFT_CONTRACT, erc721Abi, signer);
+    const alreadyApproved = await nftContract.isApprovedForAll(account, nftStakingContract.address);
+    if (!alreadyApproved) {
+      const tx = await nftContract.setApprovalForAll(nftStakingContract.address, true);
+      await tx.wait();
+    }
+  }
+
+  //======================== BATCH ACTIONS ========================
+  const handleSelectUnstaked = (tokenId, checked) => {
+    setSelectedToStake((prev) => {
+      if (checked) return [...prev, tokenId];
+      return prev.filter((t) => t !== tokenId);
+    });
+  };
+  const handleSelectStaked = (tokenId, checked) => {
+    setSelectedToUnstake((prev) => {
+      if (checked) return [...prev, tokenId];
+      return prev.filter((t) => t !== tokenId);
+    });
+  };
+
+  const handleBatchStake = async () => {
+    if (!selectedToStake.length) {
+      showMessage('No NFTs selected for staking', 'warning');
+      return;
+    }
+    try {
+      setLoadingBatch(true);
+      await ensureApprovedForAll();
+      const tokenIds = selectedToStake.map((id) => ethers.BigNumber.from(id));
+      const tx = await nftStakingContract.stakeNFTs(tokenIds);
+      await tx.wait();
+      showMessage('Stake transaction successful!', 'success');
+      await loadData();
+    } catch (err) {
+      console.error('handleBatchStake:', err);
+      showMessage(`Error in batch stake: ${err.message}`, 'error');
+    }
+    setLoadingBatch(false);
+  };
+
+  const handleBatchUnstake = async () => {
+    if (!selectedToUnstake.length) {
+      showMessage('No NFTs selected for unstaking', 'warning');
+      return;
+    }
+    try {
+      setLoadingBatch(true);
+      const tokenIds = selectedToUnstake.map((id) => ethers.BigNumber.from(id));
+      const tx = await nftStakingContract.unstakeNFTs(tokenIds);
+      await tx.wait();
+      showMessage('Unstake transaction successful!', 'success');
+      await loadData();
+    } catch (err) {
+      console.error('handleBatchUnstake:', err);
+      showMessage(`Error in batch unstake: ${err.message}`, 'error');
+    }
+    setLoadingBatch(false);
+  };
+
+  const handleClaimRewards = async () => {
+    try {
+      setLoadingBatch(true);
+      const tx = await nftStakingContract.claimRewards();
+      await tx.wait();
+      showMessage('Rewards claimed successfully!', 'success');
+      await loadData();
+    } catch (err) {
+      console.error('claimRewards:', err);
+      showMessage(`Error claiming rewards: ${err.message}`, 'error');
+    }
+    setLoadingBatch(false);
+  };
+
+  //======================== PAGINATION & FILTERS ========================
+  function paginateItems(items, page, size) {
+    const start = (page - 1) * size;
+    return items.slice(start, start + size);
+  }
+
+  // Search / Filter function
+  function filterNfts(items, searchTerm) {
+    const lower = searchTerm.toLowerCase();
+    return items.filter((item) => {
+      const { tokenId, metadata } = item;
+      const name = metadata?.name?.toLowerCase() || '';
+      // match if tokenId or name includes the searchTerm
+      return (
+        tokenId.toString().includes(lower) ||
+        name.includes(lower)
+      );
+    });
+  }
+
+  // Sorting function
+  function sortNfts(items, sortBy) {
+    const sorted = [...items];
+    if (sortBy === 'multiplier') {
+      // desc
+      sorted.sort((a, b) => Number(b.multiplier) - Number(a.multiplier));
+    } else if (sortBy === 'name') {
+      sorted.sort((a, b) => {
+        const nameA = (a.metadata?.name || '').toLowerCase();
+        const nameB = (b.metadata?.name || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
+    } else if (sortBy === 'tokenId') {
+      sorted.sort((a, b) => Number(a.tokenId) - Number(b.tokenId));
+    }
+    return sorted;
+  }
+
+  // Deriving staked arrays
+  const filteredStaked = filterNfts(stakedNfts, stakedSearchTerm);
+  const sortedStaked = sortNfts(filteredStaked, stakedSort);
+  const stakedTotalPages = Math.ceil(sortedStaked.length / stakedPageSize) || 1;
+  const pagedStaked = paginateItems(sortedStaked, stakedPage, stakedPageSize);
+
+  // Deriving unstaked arrays
+  const filteredUnstaked = filterNfts(unstakedNfts, unstakedSearchTerm);
+  const sortedUnstaked = sortNfts(filteredUnstaked, unstakedSort);
+  const unstakedTotalPages = Math.ceil(sortedUnstaked.length / unstakedPageSize) || 1;
+  const pagedUnstaked = paginateItems(sortedUnstaked, unstakedPage, unstakedPageSize);
+
+  //======================== DERIVED FINANCIAL DATA ========================
+  let userRatePerSecond = 0;
+  let userRatePerDay = 0;
+  let userRatePerYear = 0;
+  let userSharePercent = 0;
+  let epochProgressPercent = 0;
+  const totalSecInEpoch = 365 * 24 * 3600;
+
+  if (globalData && userData) {
+    const rawUserMult = userData.userTotalMultiplier;
+    const rawTotalMult = userData.totalMultiplierStaked;
+    const rawBaseRate = userData.baseRewardRate;
+
+    if (rawTotalMult && rawTotalMult.gt(0)) {
+      const fraction = Number(rawUserMult.toString()) / Number(rawTotalMult.toString());
+      userSharePercent = fraction * 100;
+
+      const scaledFrac = Math.floor(fraction * 1e6);
+      const userRateBn = rawBaseRate.mul(scaledFrac).div(1e6);
+      userRatePerSecond = Number(ethers.utils.formatEther(userRateBn));
+      userRatePerDay = userRatePerSecond * 86400;
+      userRatePerYear = userRatePerSecond * 31536000;
+    }
+
+    // epoch progress
+    const secondsLeft = globalData.secondsUntilEpochEnd.toString();
+    const leftover = Number(secondsLeft);
+    const elapsed = totalSecInEpoch - leftover;
+    if (elapsed < 0) {
+      epochProgressPercent = leftover <= 0 ? 100 : 0;
+    } else {
+      epochProgressPercent = (elapsed / totalSecInEpoch) * 100;
+    }
+  }
+
+  // Convert to USD (placeholder)
+  const dailyUsd = userRatePerDay * usdRate;
+  const yearlyUsd = userRatePerYear * usdRate;
+
+  // Admin panel example
+  const handleTopUp = async () => {
+    showMessage('Would implement a top-up flow here.', 'info');
+  };
+
+  // ======================== ARRAYS FOR DASHBOARD TABLE PAGES ======================
+  const page1Rows = [
+
+    {
+      label: 'Pending Rewards',
+      value: userData
+        ? parseFloat(ethers.utils.formatEther(userData.userPendingReward || 0)).toFixed(5) + ' FOTON'
+        : '0'
+    },
+    {
+      label: 'Share of Pool (%)',
+      value: `${userSharePercent.toFixed(2)}%`
+    },
+    {
+      label: 'FOTON/sec',
+      value: userRatePerSecond.toFixed(5)
+    },
+    {
+      label: 'FOTON/day',
+      value: `${userRatePerDay.toFixed(5)}`
+    }
+    
+  ];
+
+  const page2Rows = [
+    {
+      label: 'Current Epoch',
+      value: globalData ? globalData.currentEpoch.toString() : '0'
+    },
+    {
+      label: 'Epoch Budget',
+      value: globalData
+        ? parseFloat(ethers.utils.formatEther(globalData.epochBudget || 0)).toFixed(5) + ' FOTON'
+        : '0'
+    },
+    {
+      label: 'Epoch Ends In',
+      value: globalData
+        ? formatSeconds(globalData.secondsUntilEpochEnd.toString())
+        : '0'
+    },
+    {
+      label: 'Total Remaining Balance',
+      value: globalData
+        ? parseFloat(ethers.utils.formatEther(globalData.totalRemaining || 0)).toFixed(5) + ' FOTON'
+        : '0'
+    },
+    {
+      label: 'Epoch Progress (%)',
+      value: `${epochProgressPercent.toFixed(2)}%`,
+      isProgressBar: true
+    }
+  ];
+
+  const page3Rows = [
+    {
+      label: 'Base Reward Rate (FOTON/sec)',
+      value: userData
+        ? parseFloat(ethers.utils.formatEther(userData.baseRewardRate || 0)).toFixed(10)
+        : '0'
+    },
+    {
+      label: 'Total Multiplier Staked',
+      value: userData ? userData.totalMultiplierStaked.toString() : '0'
+    },
+    {
+      label: 'User Multiplier',
+      value: userData ? userData.userTotalMultiplier.toString() : '0'
+    },
+    {
+      label: 'Your FOTON/year',
+      value: `${userRatePerYear.toFixed(3)}`
+    }
+  ];
+
+  let displayedRows;
+  if (tablePage === 1) {
+    displayedRows = page1Rows;
+  } else if (tablePage === 2) {
+    displayedRows = page2Rows;
+  } else {
+    displayedRows = page3Rows;
+  }
+
+  //======================== RENDER ========================
+  if (!account || !nftStakingContract) {
+    return (
+      <Box sx={{ color: '#fff', textAlign: 'center', mt: 4 }}>
+        <Typography variant="h6" sx={{ mb: 2 }}>
+          Please connect your wallet to view Sapien Staking.
+        </Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: 1 }}>
+      {loading ? (
+        <CircularProgress sx={{ color: '#00bfff', my: 4 }} />
+      ) : (
+        <>
+          {/* ==================== DASHBOARD TABLE (PAGINATED) ==================== */}
+          {userData && globalData && (
+            <Box
+              sx={{
+                p: 2,
+                backgroundColor: '#2a2a2a',
+                borderRadius: 2,
+                boxShadow: '0 0 10px rgba(0,191,255,0.3)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                mb: 3
+              }}
+            >
+              {/* Row: Claim button top-left */}
+              <Box sx={{ display: 'flex', justifyContent: 'flex-start' }}>
+                <Button
+                  variant="contained"
+                  sx={{ backgroundColor: '#00bfff', color: '#fff' }}
+                  onClick={handleClaimRewards}
+                  disabled={loadingBatch}
+                >
+                  {loadingBatch ? 'Processing...' : 'Claim Rewards'}
+                </Button>
+              </Box>
+
+              {/* Table with pagination (3 pages) */}
+              <TableContainer component={Paper} sx={{ backgroundColor: '#1e1e1e' }}>
+                <Table>
+                  <TableBody>
+                    {displayedRows.map((row, idx) => (
+                      <TableRow key={`dashboard-row-${idx}`}>
+                        <TableCell>
+                          <TableLabel>{row.label}</TableLabel>
+                        </TableCell>
+                        <TableCell>
+                          {row.isProgressBar ? (
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                              <TableValue>{row.value}</TableValue>
+                              <LinearProgress
+                                variant="determinate"
+                                value={epochProgressPercent}
+                                sx={{ backgroundColor: '#444' }}
+                              />
+                            </Box>
+                          ) : (
+                            <TableValue>{row.value}</TableValue>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+
+              {/* Table pagination controls */}
+              <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mt: 1 }}>
+                <Button
+                  variant="outlined"
+                  sx={{ color: '#fff', borderColor: '#00bfff' }}
+                  disabled={tablePage <= 1}
+                  onClick={() => setTablePage((prev) => prev - 1)}
+                >
+                  Prev
+                </Button>
+                <Typography sx={{ color: '#fff' }}>
+                  Page {tablePage} of {totalPages}
+                </Typography>
+                <Button
+                  variant="outlined"
+                  sx={{ color: '#fff', borderColor: '#00bfff' }}
+                  disabled={tablePage >= totalPages}
+                  onClick={() => setTablePage((prev) => prev + 1)}
+                >
+                  Next
+                </Button>
+              </Box>
+            </Box>
+          )}
+
+          {/* ==================== STAKED NFTs ==================== */}
+          <Box
+            sx={{
+              p: 2,
+              backgroundColor: '#1b1b1b',
+              borderRadius: 2,
+              mb: 3
+            }}
+          >
+            <Typography variant="h6" sx={{ color: '#fff', mb: 2 }}>
+              Staked Sapiens
+            </Typography>
+
+            {/* Sort/Search row (Staked) */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 1, md: 2 }, mb: 2 }}>
+              <TextField
+                label="Search Staked"
+                variant="outlined"
+                size="small"
+                value={stakedSearchTerm}
+                onChange={(e) => {
+                  setStakedSearchTerm(e.target.value);
+                  setStakedPage(1);
+                }}
+                sx={{ maxWidth: 200, color: '#fff', backgroundColor: '#2a2a2a' }}
+                InputLabelProps={{ style: { color: '#ccc' } }}
+              />
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: { xs: 1, md: 2 } }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <Select
+                    value={stakedSort}
+                    label="Sort Staked"
+                    onChange={(e) => {
+                      setStakedSort(e.target.value);
+                      setStakedPage(1);
+                    }}
+                    sx={{ color: '#fff', minWidth: '100px' }}
+                    size="small"
+
+                    MenuProps={{
+                      PaperProps: {
+                        sx: {
+                          // Dark background color
+                          bgcolor: '#1e1e1e',
+                          // Set menu items' text color
+                          '& .MuiMenuItem-root': {
+                            color: '#fff'
+                          },
+                          // Hover effect for menu items
+                          '& .MuiMenuItem-root:hover': {
+                            backgroundColor: '#2a2a2a'
+                          }
+                        }
+                      }
+                    }}
+                  >
+                    <MenuItem value="multiplier">Multiplier</MenuItem>
+                    <MenuItem value="name">Name</MenuItem>
+                    <MenuItem value="tokenId">Token ID</MenuItem>
+                  </Select>
+                </Box>
+
+                {/* Items per page (Staked) */}
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <InputLabel sx={{ color: '#ccc', mr: 1 }}>Items per page</InputLabel>
+                  <Select
+                    value={stakedPageSize}
+                    label="Staked Page Size"
+                    onChange={(e) => {
+                      setStakedPageSize(e.target.value);
+                      setStakedPage(1);
+                    }}
+                    sx={{ color: '#fff', minWidth: '60px' }}
+                    size="small"
+
+                    MenuProps={{
+                      PaperProps: {
+                        sx: {
+                          // Dark background color
+                          bgcolor: '#1e1e1e',
+                          // Set menu items' text color
+                          '& .MuiMenuItem-root': {
+                            color: '#fff'
+                          },
+                          // Hover effect for menu items
+                          '& .MuiMenuItem-root:hover': {
+                            backgroundColor: '#2a2a2a'
+                          }
+                        }
+                      }
+                    }}
+                  >
+                    <MenuItem value={4}>4</MenuItem>
+                    <MenuItem value={8}>8</MenuItem>
+                    <MenuItem value={16}>16</MenuItem>
+                  </Select>
+                </Box>
+              </Box>
+            </Box>
+
+            {/* Display staked NFTs in a responsive grid */}
+            {sortedStaked.length === 0 ? (
+              <Typography sx={{ color: '#ccc' }}>No staked Sapiens found.</Typography>
+            ) : (
+              <Grid container spacing={2} justifyContent="center">
+                {pagedStaked.map((item) => {
+                  const selected = selectedToUnstake.includes(item.tokenId);
+                  return (
+                    <Grid item xs={12} sm={6} md={4} lg={3} key={item.tokenId}>
+                      <NFTCheckboxCard
+                        nft={item}
+                        selected={selected}
+                        onSelectChange={handleSelectStaked}
+                        isStaked
+                        multiplier={item.multiplier}
+                        unclaimed={item.unclaimed}
+                      />
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            )}
+
+            {/* Pagination + Unstake Button */}
+            {sortedStaked.length > 0 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mt: 2, flexWrap: 'wrap' }}>
+                <Button
+                  variant="outlined"
+                  disabled={stakedPage <= 1}
+                  onClick={() => setStakedPage((prev) => prev - 1)}
+                  sx={{ color: '#fff', borderColor: '#00bfff' }}
+                >
+                  Prev
+                </Button>
+                <Typography sx={{ color: '#fff' }}>
+                  Page {stakedPage} of {stakedTotalPages}
+                </Typography>
+                <Button
+                  variant="outlined"
+                  disabled={stakedPage >= stakedTotalPages}
+                  onClick={() => setStakedPage((prev) => prev + 1)}
+                  sx={{ color: '#fff', borderColor: '#00bfff' }}
+                >
+                  Next
+                </Button>
+
+                <Button
+                  variant="contained"
+                  sx={{ ml: 'auto', backgroundColor: '#00bfff', color: '#fff' }}
+                  onClick={handleBatchUnstake}
+                  disabled={loadingBatch}
+                >
+                  {loadingBatch ? 'Processing...' : 'Unstake Selected'}
+                </Button>
+              </Box>
+            )}
+          </Box>
+
+          {/* ==================== UNSTAKED NFTs ==================== */}
+          <Box
+            sx={{
+              p: 2,
+              backgroundColor: '#1b1b1b',
+              borderRadius: 2,
+              mb: 3
+            }}
+          >
+            <Typography variant="h6" sx={{ color: '#fff', mb: 2 }}>
+              Unstaked Sapiens
+            </Typography>
+
+            {/* Sort/Search row (Unstaked) */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 1, md: 2 }, mb: 2 }}>
+              <TextField
+                label="Search Unstaked"
+                variant="outlined"
+                size="small"
+                value={unstakedSearchTerm}
+                onChange={(e) => {
+                  setUnstakedSearchTerm(e.target.value);
+                  setUnstakedPage(1);
+                }}
+                sx={{ maxWidth: 200, color: '#fff', backgroundColor: '#2a2a2a' }}
+                InputLabelProps={{ style: { color: '#ccc' } }}
+              />
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: { xs: 1, md: 2 } }}>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <Select
+                    value={unstakedSort}
+                    label="Sort Unstaked"
+                    onChange={(e) => {
+                      setUnstakedSort(e.target.value);
+                      setUnstakedPage(1);
+                    }}
+                    sx={{ color: '#fff', minWidth: '100px' }}
+                    size="small"
+
+                    MenuProps={{
+                      PaperProps: {
+                        sx: {
+                          // Dark background color
+                          bgcolor: '#1e1e1e',
+                          // Set menu items' text color
+                          '& .MuiMenuItem-root': {
+                            color: '#fff'
+                          },
+                          // Hover effect for menu items
+                          '& .MuiMenuItem-root:hover': {
+                            backgroundColor: '#2a2a2a'
+                          }
+                        }
+                      }
+                    }}
+                  >
+                    <MenuItem value="multiplier">Multiplier</MenuItem>
+                    <MenuItem value="name">Name</MenuItem>
+                    <MenuItem value="tokenId">Token ID</MenuItem>
+                  </Select>
+                </Box>
+
+                {/* Items per page (Unstaked) */}
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <InputLabel sx={{ color: '#ccc', mr: 1 }}>Items per page</InputLabel>
+                  <Select
+                    value={unstakedPageSize}
+                    label="Unstaked Page Size"
+                    onChange={(e) => {
+                      setUnstakedPageSize(e.target.value);
+                      setUnstakedPage(1);
+                    }}
+                    sx={{ color: '#fff', minWidth: '60px' }}
+                    size="small"
+
+                    MenuProps={{
+                      PaperProps: {
+                        sx: {
+                          // Dark background color
+                          bgcolor: '#1e1e1e',
+                          // Set menu items' text color
+                          '& .MuiMenuItem-root': {
+                            color: '#fff'
+                          },
+                          // Hover effect for menu items
+                          '& .MuiMenuItem-root:hover': {
+                            backgroundColor: '#2a2a2a'
+                          }
+                        }
+                      }
+                    }}
+                  >
+                    <MenuItem value={4}>4</MenuItem>
+                    <MenuItem value={8}>8</MenuItem>
+                    <MenuItem value={16}>16</MenuItem>
+                  </Select>
+                </Box>
+              </Box>
+            </Box>
+
+            {/* Display unstaked NFTs in a responsive grid */}
+            {sortedUnstaked.length === 0 ? (
+              <Typography sx={{ color: '#ccc' }}>No unstaked Sapiens found.</Typography>
+            ) : (
+              <Grid container spacing={2} justifyContent="center">
+                {pagedUnstaked.map((item) => {
+                  const selected = selectedToStake.includes(item.tokenId);
+                  return (
+                    <Grid item xs={12} sm={6} md={4} lg={3} key={item.tokenId}>
+                      <NFTCheckboxCard
+                        nft={item}
+                        selected={selected}
+                        onSelectChange={handleSelectUnstaked}
+                        isStaked={false}
+                        multiplier={item.multiplier}
+                      />
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            )}
+
+            {/* Pagination + Stake Button */}
+            {sortedUnstaked.length > 0 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mt: 2, flexWrap: 'wrap' }}>
+                <Button
+                  variant="outlined"
+                  disabled={unstakedPage <= 1}
+                  onClick={() => setUnstakedPage((prev) => prev - 1)}
+                  sx={{ color: '#fff', borderColor: '#00bfff' }}
+                >
+                  Prev
+                </Button>
+                <Typography sx={{ color: '#fff' }}>
+                  Page {unstakedPage} of {unstakedTotalPages}
+                </Typography>
+                <Button
+                  variant="outlined"
+                  disabled={unstakedPage >= unstakedTotalPages}
+                  onClick={() => setUnstakedPage((prev) => prev + 1)}
+                  sx={{ color: '#fff', borderColor: '#00bfff' }}
+                >
+                  Next
+                </Button>
+
+                <Button
+                  variant="contained"
+                  sx={{ ml: 'auto', backgroundColor: '#00bfff', color: '#fff' }}
+                  onClick={handleBatchStake}
+                  disabled={loadingBatch}
+                >
+                  {loadingBatch ? 'Processing...' : 'Stake Selected'}
+                </Button>
+              </Box>
+            )}
+          </Box>
+        </>
+      )}
+
+      {/* SNACKBAR */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert variant="filled" severity={snackbar.severity} onClose={handleCloseSnackbar}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+    </Box>
+  );
+}

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="Floor Sweepers Staking - Nexapia" content="Floor Sweepers Staking" />
+
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    
+    <!-- CONTENT SECURITY POLICY UPDATED -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        connect-src
+          'self'
+          https://storage.googleapis.com
+          https://flare-explorer.flare.network
+          https://localhost:3000
+          http://localhost:3000
+          ws://localhost:3000
+          wss://localhost:3000;
+        img-src 'self' https://storage.googleapis.com data:;
+        script-src 'self' 'unsafe-inline' 'unsafe-eval';
+        style-src 'self' 'unsafe-inline';
+        font-src 'self' data:;
+      "
+    />
+    
+    <title>Floor Sweepers Staking - Nexapia</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div class="background-overlay"></div>
+    <div id="root"></div>
+  </body>
+</html>

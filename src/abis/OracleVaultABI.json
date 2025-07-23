@@ -1,0 +1,1533 @@
+[
+	{
+		"inputs": [],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"inputs": [],
+		"name": "InvalidEpochId",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "InvalidEpochRange",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "InvalidMonthRange",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "owner",
+				"type": "address"
+			}
+		],
+		"name": "OwnableInvalidOwner",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
+			}
+		],
+		"name": "OwnableUnauthorizedAccount",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			}
+		],
+		"name": "SafeERC20FailedOperation",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "ZeroAddress",
+		"type": "error"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "uint24",
+				"name": "epochId",
+				"type": "uint24"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "wnatAdded",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "fotonAdded",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "totalActiveStake",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "timestamp",
+				"type": "uint256"
+			}
+		],
+		"name": "EpochFinalized",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "message",
+				"type": "string"
+			}
+		],
+		"name": "LogError",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "previousOwner",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "newOwner",
+				"type": "address"
+			}
+		],
+		"name": "OwnershipTransferred",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
+			}
+		],
+		"name": "Paused",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "account",
+				"type": "address"
+			}
+		],
+		"name": "Unpaused",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "uint24",
+				"name": "epochId",
+				"type": "uint24"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "wnatReward",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "fotonReward",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "timestamp",
+				"type": "uint256"
+			}
+		],
+		"name": "UserEpochClaimed",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "newPendingAmount",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "totalPendingStake",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "timestamp",
+				"type": "uint256"
+			}
+		],
+		"name": "UserStaked",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "amountUnstaked",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "newActiveStake",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint24",
+				"name": "currentEpochId",
+				"type": "uint24"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "timestamp",
+				"type": "uint256"
+			}
+		],
+		"name": "UserUnstaked",
+		"type": "event"
+	},
+	{
+		"inputs": [],
+		"name": "AIRDROP_CONTRACT_ADDRESS",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "CALLER_REWARD_MAX_WEI",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "EPOCH_RETENTION",
+		"outputs": [
+			{
+				"internalType": "uint24",
+				"name": "",
+				"type": "uint24"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "FOTON_ADDRESS",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "MAX_ACTIVATIONS",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "MAX_OFFICIAL_EPOCHS_CLAIM",
+		"outputs": [
+			{
+				"internalType": "uint24",
+				"name": "",
+				"type": "uint24"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "REWARD_MANAGER_ADDRESS",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "TIMELOCK_DELAY",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "WNAT_ADDRESS",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "autoAdvanceEpochPublic",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint24",
+				"name": "epochId",
+				"type": "uint24"
+			},
+			{
+				"internalType": "address",
+				"name": "_rewardOwner",
+				"type": "address"
+			},
+			{
+				"internalType": "bool",
+				"name": "_wrap",
+				"type": "bool"
+			},
+			{
+				"components": [
+					{
+						"internalType": "bytes32[]",
+						"name": "merkleProof",
+						"type": "bytes32[]"
+					},
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "rewardEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "bytes20",
+								"name": "beneficiary",
+								"type": "bytes20"
+							},
+							{
+								"internalType": "uint120",
+								"name": "amount",
+								"type": "uint120"
+							},
+							{
+								"internalType": "enum IRewardManager.ClaimType",
+								"name": "claimType",
+								"type": "uint8"
+							}
+						],
+						"internalType": "struct IRewardManager.RewardClaim",
+						"name": "body",
+						"type": "tuple"
+					}
+				],
+				"internalType": "struct IRewardManager.RewardClaimWithProof[]",
+				"name": "_proofs",
+				"type": "tuple[]"
+			}
+		],
+		"name": "autoClaimFromRewardManager",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "cancelEmergencyWithdraw",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint24",
+				"name": "startEpoch",
+				"type": "uint24"
+			},
+			{
+				"internalType": "uint24",
+				"name": "endEpoch",
+				"type": "uint24"
+			}
+		],
+		"name": "claimAllEpochRewards",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "claimAllForUser",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "claimAndFinalizeAll",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "_rewardOwner",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "startMonth",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "endMonth",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "_wrap",
+				"type": "bool"
+			}
+		],
+		"name": "claimMonthlyAirdropsInRange",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint24",
+				"name": "epochId",
+				"type": "uint24"
+			}
+		],
+		"name": "computeEpochReward",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "provider",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "bips",
+				"type": "uint256"
+			}
+		],
+		"name": "delegateWnat",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "executeEmergencyWithdraw",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "foton",
+		"outputs": [
+			{
+				"internalType": "contract IERC20",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"internalType": "uint24",
+				"name": "startEpoch",
+				"type": "uint24"
+			},
+			{
+				"internalType": "uint24",
+				"name": "endEpoch",
+				"type": "uint24"
+			}
+		],
+		"name": "getEverything",
+		"outputs": [
+			{
+				"components": [
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "currentEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "lastFinalizedEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalActiveStake",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalFotonStaked",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalDelegationRewards",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "minStakeAmount",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "pendingStakersCount",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint24",
+								"name": "lastForgottenEpoch",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "lastDelegationEpochClaimed",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "managerCurrentEpoch",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "managerNextClaimableEpochIdForVault",
+								"type": "uint24"
+							},
+							{
+								"internalType": "bool",
+								"name": "allRewardsClaimed",
+								"type": "bool"
+							},
+							{
+								"internalType": "bool",
+								"name": "allStakersActivated",
+								"type": "bool"
+							},
+							{
+								"internalType": "uint256",
+								"name": "wnatBalanceInVault",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalWnatDebt",
+								"type": "uint256"
+							},
+							{
+								"internalType": "address",
+								"name": "yieldVaultAddress",
+								"type": "address"
+							},
+							{
+								"internalType": "address",
+								"name": "airdropContractAddress",
+								"type": "address"
+							}
+						],
+						"internalType": "struct VaultGlobalData",
+						"name": "globalData",
+						"type": "tuple"
+					},
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "rewardEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "bool",
+								"name": "claimable",
+								"type": "bool"
+							},
+							{
+								"components": [
+									{
+										"internalType": "uint24",
+										"name": "rewardEpochId",
+										"type": "uint24"
+									},
+									{
+										"internalType": "bytes20",
+										"name": "beneficiary",
+										"type": "bytes20"
+									},
+									{
+										"internalType": "uint120",
+										"name": "amount",
+										"type": "uint120"
+									},
+									{
+										"internalType": "enum IRewardManager.ClaimType",
+										"name": "claimType",
+										"type": "uint8"
+									},
+									{
+										"internalType": "bool",
+										"name": "initialised",
+										"type": "bool"
+									}
+								],
+								"internalType": "struct IRewardManager.RewardState[]",
+								"name": "rewardClaims",
+								"type": "tuple[]"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalUnclaimed",
+								"type": "uint256"
+							}
+						],
+						"internalType": "struct RewardManagerEpochData[]",
+						"name": "managerRewards",
+						"type": "tuple[]"
+					},
+					{
+						"internalType": "uint256",
+						"name": "wnatWalletBalance",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "fotonWalletBalance",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "pendingStake",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "activeStake",
+						"type": "uint256"
+					},
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "managerCurrentEpoch",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "nextClaimableRewardEpochId",
+								"type": "uint24"
+							}
+						],
+						"internalType": "struct RewardManagerData",
+						"name": "rewardMgrData",
+						"type": "tuple"
+					},
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "epochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint256",
+								"name": "staked",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "forfeited",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "wNatReward",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "fotonReward",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "epochAccRewardPerShare",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "epochAccFotonRewardPerShare",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "userRewardDebt",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "userFotonRewardDebt",
+								"type": "uint256"
+							}
+						],
+						"internalType": "struct UserEpochData[]",
+						"name": "epochsData",
+						"type": "tuple[]"
+					}
+				],
+				"internalType": "struct Everything",
+				"name": "allData",
+				"type": "tuple"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint24",
+				"name": "startEpoch",
+				"type": "uint24"
+			},
+			{
+				"internalType": "uint24",
+				"name": "endEpoch",
+				"type": "uint24"
+			}
+		],
+		"name": "getGlobalDataAcrossEpochs",
+		"outputs": [
+			{
+				"components": [
+					{
+						"internalType": "uint24",
+						"name": "epochId",
+						"type": "uint24"
+					},
+					{
+						"internalType": "uint256",
+						"name": "epochTotalStake",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "epochAccRewardPerShare",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "epochAccFotonRewardPerShare",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "epochLastDelegRewards",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "epochLastFotonRewards",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "epochTotalDebt",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "epochFotonTotalDebt",
+						"type": "uint256"
+					},
+					{
+						"internalType": "bool",
+						"name": "isFinalized",
+						"type": "bool"
+					}
+				],
+				"internalType": "struct GlobalEpochData[]",
+				"name": "data",
+				"type": "tuple[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getGlobalVaultData",
+		"outputs": [
+			{
+				"components": [
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "currentEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "lastFinalizedEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalActiveStake",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalFotonStaked",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalDelegationRewards",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "minStakeAmount",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "pendingStakersCount",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint24",
+								"name": "lastForgottenEpoch",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "lastDelegationEpochClaimed",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "managerCurrentEpoch",
+								"type": "uint24"
+							},
+							{
+								"internalType": "uint24",
+								"name": "managerNextClaimableEpochIdForVault",
+								"type": "uint24"
+							},
+							{
+								"internalType": "bool",
+								"name": "allRewardsClaimed",
+								"type": "bool"
+							},
+							{
+								"internalType": "bool",
+								"name": "allStakersActivated",
+								"type": "bool"
+							},
+							{
+								"internalType": "uint256",
+								"name": "wnatBalanceInVault",
+								"type": "uint256"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalWnatDebt",
+								"type": "uint256"
+							},
+							{
+								"internalType": "address",
+								"name": "yieldVaultAddress",
+								"type": "address"
+							},
+							{
+								"internalType": "address",
+								"name": "airdropContractAddress",
+								"type": "address"
+							}
+						],
+						"internalType": "struct VaultGlobalData",
+						"name": "vaultData",
+						"type": "tuple"
+					},
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "rewardEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "bool",
+								"name": "claimable",
+								"type": "bool"
+							},
+							{
+								"components": [
+									{
+										"internalType": "uint24",
+										"name": "rewardEpochId",
+										"type": "uint24"
+									},
+									{
+										"internalType": "bytes20",
+										"name": "beneficiary",
+										"type": "bytes20"
+									},
+									{
+										"internalType": "uint120",
+										"name": "amount",
+										"type": "uint120"
+									},
+									{
+										"internalType": "enum IRewardManager.ClaimType",
+										"name": "claimType",
+										"type": "uint8"
+									},
+									{
+										"internalType": "bool",
+										"name": "initialised",
+										"type": "bool"
+									}
+								],
+								"internalType": "struct IRewardManager.RewardState[]",
+								"name": "rewardClaims",
+								"type": "tuple[]"
+							},
+							{
+								"internalType": "uint256",
+								"name": "totalUnclaimed",
+								"type": "uint256"
+							}
+						],
+						"internalType": "struct RewardManagerEpochData[]",
+						"name": "managerRewards",
+						"type": "tuple[]"
+					}
+				],
+				"internalType": "struct VaultGlobalAndManagerRewards",
+				"name": "",
+				"type": "tuple"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "_rewardOwner",
+				"type": "address"
+			},
+			{
+				"internalType": "uint24",
+				"name": "startEpochId",
+				"type": "uint24"
+			},
+			{
+				"internalType": "uint24",
+				"name": "endEpochId",
+				"type": "uint24"
+			}
+		],
+		"name": "getRewardManagerUnclaimedEpochsData",
+		"outputs": [
+			{
+				"components": [
+					{
+						"internalType": "uint24",
+						"name": "rewardEpochId",
+						"type": "uint24"
+					},
+					{
+						"internalType": "bool",
+						"name": "claimable",
+						"type": "bool"
+					},
+					{
+						"components": [
+							{
+								"internalType": "uint24",
+								"name": "rewardEpochId",
+								"type": "uint24"
+							},
+							{
+								"internalType": "bytes20",
+								"name": "beneficiary",
+								"type": "bytes20"
+							},
+							{
+								"internalType": "uint120",
+								"name": "amount",
+								"type": "uint120"
+							},
+							{
+								"internalType": "enum IRewardManager.ClaimType",
+								"name": "claimType",
+								"type": "uint8"
+							},
+							{
+								"internalType": "bool",
+								"name": "initialised",
+								"type": "bool"
+							}
+						],
+						"internalType": "struct IRewardManager.RewardState[]",
+						"name": "rewardClaims",
+						"type": "tuple[]"
+					},
+					{
+						"internalType": "uint256",
+						"name": "totalUnclaimed",
+						"type": "uint256"
+					}
+				],
+				"internalType": "struct RewardManagerEpochData[]",
+				"name": "",
+				"type": "tuple[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getTotalWnatDebt",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"internalType": "uint24",
+				"name": "startEpoch",
+				"type": "uint24"
+			},
+			{
+				"internalType": "uint24",
+				"name": "endEpoch",
+				"type": "uint24"
+			}
+		],
+		"name": "getUserEphemeralRewards",
+		"outputs": [
+			{
+				"components": [
+					{
+						"internalType": "uint24",
+						"name": "epochId",
+						"type": "uint24"
+					},
+					{
+						"internalType": "uint256",
+						"name": "wnatAmount",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "fotonAmount",
+						"type": "uint256"
+					}
+				],
+				"internalType": "struct OracleVaultV2.EphemeralRewardOutput[]",
+				"name": "results",
+				"type": "tuple[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint24",
+				"name": "epochId",
+				"type": "uint24"
+			},
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			}
+		],
+		"name": "getUserEpochReport",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "stakeSnapshot",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "forfeitedSnapshot",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "claimedThisEpoch",
+				"type": "bool"
+			},
+			{
+				"internalType": "address[]",
+				"name": "tokens",
+				"type": "address[]"
+			},
+			{
+				"internalType": "uint256[]",
+				"name": "amounts",
+				"type": "uint256[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "owner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "pause",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "paused",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "month",
+				"type": "uint256"
+			}
+		],
+		"name": "pendingAirdropAmount",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "recipient",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "recoverERC20Immediately",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "tokenAddress",
+				"type": "address"
+			}
+		],
+		"name": "redirectERC20ToYieldVault",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "reduceAmt",
+				"type": "uint256"
+			}
+		],
+		"name": "reduceStakeFoton",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "renounceOwnership",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "rewardManager",
+		"outputs": [
+			{
+				"internalType": "contract IRewardManager",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "to",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "isEther",
+				"type": "bool"
+			}
+		],
+		"name": "scheduleEmergencyWithdraw",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "_amount",
+				"type": "uint256"
+			}
+		],
+		"name": "setMinStakeAmount",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "_redirectAddress",
+				"type": "address"
+			}
+		],
+		"name": "setYieldVaultAddress",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "stakeFoton",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "syncWithRewardManagerPublic",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "thisMonth",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "newOwner",
+				"type": "address"
+			}
+		],
+		"name": "transferOwnership",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "undelegateAll",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "unpause",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "unstakeFoton",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint24",
+				"name": "epochId",
+				"type": "uint24"
+			}
+		],
+		"name": "withdrawEpochReward",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "withdrawPendingStake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "wnat",
+		"outputs": [
+			{
+				"internalType": "contract IWNat",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"stateMutability": "payable",
+		"type": "receive"
+	}
+]
