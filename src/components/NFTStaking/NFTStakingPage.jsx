@@ -34,7 +34,7 @@ import {
 } from '@mui/material';
 import { ethers } from 'ethers';
 import { BlockchainContext } from '../../contexts/BlockchainContext';
-
+import useIpfsImg from '../../hooks/useIpfsImg'  // adjust path as needed
 /* 
   ================================
   =  0. Utility & Styled Helpers =
@@ -73,7 +73,7 @@ const StyledFormControl = styled('div')(({ theme }) => ({
 /**
  * The authorized NFT contract for staking
  */
-const AUTHORIZED_NFT_CONTRACT = '0x91123826D7102aa55922D988570802AFa617CfA0'.toLowerCase();
+const AUTHORIZED_NFT_CONTRACT = '0xbc42e9a6c24664749b2a0d571fd67f23386e34b8'.toLowerCase();
 
 /* 
   =================================
@@ -148,11 +148,49 @@ async function fetchTokenInstanceMetadata(contractAddr, tokenId, metadataCacheRe
 
   // 3) Not found => fetch from Explorer with retry
   const url = `https://flare-explorer.flare.network/api/v2/tokens/${contractAddr}/instances/${tokenId}`;
+
+    /* ---------------------------------------------------------- */
+    /*  helper – turn *any* ipfs://… or …/ipfs/CID into a gateway */
+/* ---------------------------------------------------------- */
+    const normalizeIpfs = (u) => {
+      if (!u) return null;
+      // ipfs://CID/[…]
+      if (u.startsWith('ipfs://')) {
+        return `https://dweb.link/ipfs/${u.slice(7)}`;
+      }
+      // https://foo.bar/ipfs/CID/[…]
+      const m = u.match(/\/ipfs\/(.+)/);
+      if (m) return `https://dweb.link/ipfs/${m[1]}`;
+      return u;                              // already https/http
+    };
+
   try {
     const resp = await fetchWithRetry(url, { method: 'GET', headers: { accept: 'application/json' } }, 3);
     const data = await resp.json();
 
-    const imageUrl = data.image_url || data.media_url || null;
+    
+
+    const normalizeIpfs = (u) => {
+      if (!u) return null;
+
+      // 1. ipfs://CID/…  -> gateway/ipfs/CID/…
+      if (u.startsWith('ipfs://')) {
+        return `https://dweb.link/ipfs/${u.slice(7)}`;
+      }
+
+      // 2. https://whatever.tld/ipfs/CID/… -> rewrite to the same CID on gateway
+      const m = u.match(/\/ipfs\/(.+)/);
+      if (m) {
+        return `https://dweb.link/ipfs/${m[1]}`;
+      }
+
+      // 3. already https and not IPFS – leave as is
+      return u;
+    };
+
+    const imageUrl = normalizeIpfs(data.image_url || data.media_url);
+
+
     const meta = data.metadata || null;
     const symbol = data.token?.symbol || null;
 
@@ -280,13 +318,13 @@ function NFTCheckboxCard({
   const { tokenId, image_url, metadata } = nft;
   const nftName = metadata?.name || `Token #${tokenId}`;
 
-  // fallback image if image_url is null
-  const displayImage = image_url || 'https://via.placeholder.com/300';
-
-  // Simple error handler for the <img>
-  const handleImageError = (e) => {
-    e.target.src = 'https://via.placeholder.com/300?text=Image+Unavailable';
-  };
+// ← new IPFS‐aware hook
+const {
+  src: displayImage,
+  loaded,
+  onError: handleImageError,
+  onLoad
+} = useIpfsImg(image_url);
 
   return (
     <Card
@@ -313,15 +351,15 @@ function NFTCheckboxCard({
       {displayImage && (
         <CardMedia
           component="img"
-          // Set a responsive height—auto on smaller screens
           sx={{
             width: '100%',
             height: { xs: 'auto', sm: 200 },
-            objectFit: 'cover'
+            objectFit: 'cover',
           }}
           image={displayImage}
           alt={`NFT #${tokenId}`}
           loading="lazy"
+          onLoad={onLoad}
           onError={handleImageError}
         />
       )}
@@ -340,7 +378,7 @@ function NFTCheckboxCard({
               Unclaimed:
             </Typography>
             <Typography variant="body2" sx={{ color: '#ccc', mb: 1 }}>
-              {parseFloat(unclaimed).toFixed(5)} FOTON
+              {parseFloat(unclaimed).toFixed(5)} $Maid
             </Typography>
           </Tooltip>
         )}
@@ -370,6 +408,30 @@ function NFTCheckboxCard({
 
 export default function NFTStakingPage() {
   const { account, nftStakingContract, signer, provider } = useContext(BlockchainContext);
+
+    /* ------------------------------------------------------------------ */
+  /*   DECIMALS — read once from chain and share with whole component    */
+  /* ------------------------------------------------------------------ */
+  const [rewardDecimals, setRewardDecimals] = useState(18);          // default → 18
+
+  useEffect(() => {
+    async function loadDecimals() {
+      try {
+        const erc20 = new ethers.Contract(
+          process.env.REACT_APP_FOTON_TOKEN_ADDRESS,
+          ['function decimals() view returns (uint8)'],
+          provider
+        );
+        setRewardDecimals(await erc20.decimals());
+      } catch (e) {
+        console.warn('Could not read decimals(), fallback to 18', e);
+      }
+    }
+    if (provider) loadDecimals();
+  }, [provider]);
+
+  /** helper: BigNumber → float using current token decimals */
+  const toFloat = (bn) => parseFloat(ethers.utils.formatUnits(bn || 0, rewardDecimals));
 
   // Loading states
   const [loading, setLoading] = useState(false);
@@ -447,7 +509,10 @@ export default function NFTStakingPage() {
         const rawId = data.stakedTokenIds[i].toString();
         const rawMultiplier = data.tokenMultipliers[i].toString();
         const unclaimedWei = data.tokenUnclaimedRewards[i];
-        const unclaimedEther = ethers.utils.formatEther(unclaimedWei || '0');
+        const unclaimedEther = ethers.utils.formatUnits(
+          unclaimedWei || '0',
+          rewardDecimals
+        );
 
         const instanceMeta = await fetchTokenInstanceMetadata(
           AUTHORIZED_NFT_CONTRACT,
@@ -647,7 +712,7 @@ export default function NFTStakingPage() {
 
       const scaledFrac = Math.floor(fraction * 1e6);
       const userRateBn = rawBaseRate.mul(scaledFrac).div(1e6);
-      userRatePerSecond = Number(ethers.utils.formatEther(userRateBn));
+      userRatePerSecond = Number(ethers.utils.formatUnits(userRateBn, rewardDecimals));
       userRatePerDay = userRatePerSecond * 86400;
       userRatePerYear = userRatePerSecond * 31536000;
     }
@@ -678,7 +743,7 @@ export default function NFTStakingPage() {
     {
       label: 'Pending Rewards',
       value: userData
-        ? parseFloat(ethers.utils.formatEther(userData.userPendingReward || 0)).toFixed(5) + ' FOTON'
+        ? toFloat(userData.userPendingReward).toFixed(5) + ' $Maid'
         : '0'
     },
     {
@@ -686,11 +751,11 @@ export default function NFTStakingPage() {
       value: `${userSharePercent.toFixed(2)}%`
     },
     {
-      label: 'FOTON/sec',
+      label: '$Maid/sec',
       value: userRatePerSecond.toFixed(5)
     },
     {
-      label: 'FOTON/day',
+      label: '$Maid/day',
       value: `${userRatePerDay.toFixed(5)}`
     }
     
@@ -704,7 +769,7 @@ export default function NFTStakingPage() {
     {
       label: 'Epoch Budget',
       value: globalData
-        ? parseFloat(ethers.utils.formatEther(globalData.epochBudget || 0)).toFixed(5) + ' FOTON'
+        ? toFloat(globalData.epochBudget).toFixed(5) + ' $Maid'
         : '0'
     },
     {
@@ -716,7 +781,7 @@ export default function NFTStakingPage() {
     {
       label: 'Total Remaining Balance',
       value: globalData
-        ? parseFloat(ethers.utils.formatEther(globalData.totalRemaining || 0)).toFixed(5) + ' FOTON'
+        ? toFloat(globalData.totalRemaining).toFixed(5) + ' $Maid'
         : '0'
     },
     {
@@ -728,9 +793,9 @@ export default function NFTStakingPage() {
 
   const page3Rows = [
     {
-      label: 'Base Reward Rate (FOTON/sec)',
+      label: 'Base Reward Rate ($Maid/sec)',
       value: userData
-        ? parseFloat(ethers.utils.formatEther(userData.baseRewardRate || 0)).toFixed(10)
+        ? toFloat(userData.baseRewardRate).toFixed(10)
         : '0'
     },
     {
@@ -742,7 +807,7 @@ export default function NFTStakingPage() {
       value: userData ? userData.userTotalMultiplier.toString() : '0'
     },
     {
-      label: 'Your FOTON/year',
+      label: 'Your $Maid/year',
       value: `${userRatePerYear.toFixed(3)}`
     }
   ];
@@ -761,7 +826,7 @@ export default function NFTStakingPage() {
     return (
       <Box sx={{ color: '#fff', textAlign: 'center', mt: 4 }}>
         <Typography variant="h6" sx={{ mb: 2 }}>
-          Please connect your wallet to view Sapien Staking.
+          Please connect your wallet to view Floor Sweeper Staking.
         </Typography>
       </Box>
     );
@@ -863,7 +928,7 @@ export default function NFTStakingPage() {
             }}
           >
             <Typography variant="h6" sx={{ color: '#fff', mb: 2 }}>
-              Staked Sapiens
+              Staked Floor Sweepers
             </Typography>
 
             {/* Sort/Search row (Staked) */}
@@ -955,7 +1020,7 @@ export default function NFTStakingPage() {
 
             {/* Display staked NFTs in a responsive grid */}
             {sortedStaked.length === 0 ? (
-              <Typography sx={{ color: '#ccc' }}>No staked Sapiens found.</Typography>
+              <Typography sx={{ color: '#ccc' }}>No staked Floor Sweepers found.</Typography>
             ) : (
               <Grid container spacing={2} justifyContent="center">
                 {pagedStaked.map((item) => {
@@ -1021,7 +1086,7 @@ export default function NFTStakingPage() {
             }}
           >
             <Typography variant="h6" sx={{ color: '#fff', mb: 2 }}>
-              Unstaked Sapiens
+              Unstaked Floor Sweepers
             </Typography>
 
             {/* Sort/Search row (Unstaked) */}
@@ -1113,7 +1178,7 @@ export default function NFTStakingPage() {
 
             {/* Display unstaked NFTs in a responsive grid */}
             {sortedUnstaked.length === 0 ? (
-              <Typography sx={{ color: '#ccc' }}>No unstaked Sapiens found.</Typography>
+              <Typography sx={{ color: '#ccc' }}>No unstaked Floor Sweepers found.</Typography>
             ) : (
               <Grid container spacing={2} justifyContent="center">
                 {pagedUnstaked.map((item) => {

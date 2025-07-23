@@ -9,7 +9,7 @@
 
     <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    
+
     <!-- CONTENT SECURITY POLICY UPDATED -->
     <meta
       http-equiv="Content-Security-Policy"
@@ -23,13 +23,24 @@
           http://localhost:3000
           ws://localhost:3000
           wss://localhost:3000;
-        img-src 'self' https://storage.googleapis.com data:;
+        img-src
+          'self'
+          https://storage.googleapis.com
+          https://via.placeholder.com
+          https://ipfs.io
+          https://gateway.pinata.cloud
+          https://dweb.link
+          https://*.dweb.link
+          https://cloudflare-ipfs.com
+          https://infura-ipfs.io
+          https://ipfs.explorer.flare.network
+          data:;
         script-src 'self' 'unsafe-inline' 'unsafe-eval';
         style-src 'self' 'unsafe-inline';
         font-src 'self' data:;
       "
     />
-    
+
     <title>Floor Sweepers Staking - Nexapia</title>
   </head>
   <body>
