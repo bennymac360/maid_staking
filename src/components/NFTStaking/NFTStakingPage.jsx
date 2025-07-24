@@ -2,7 +2,8 @@ import React, {
   useContext,
   useState,
   useEffect,
-  useRef
+  useRef,
+  useMemo
 } from 'react';
 import {
   Box,
@@ -30,8 +31,11 @@ import {
   TableRow,
   Paper,
   Grid, // <-- NEW: Import Grid for responsive card layout
-  useTheme // for breakpoint-based styling if needed
+  useTheme, // for breakpoint-based styling if needed
+  Skeleton
 } from '@mui/material';
+import debounce from 'lodash.debounce';       // <<< add
+import { FixedSizeGrid as VirtualGrid } from 'react-window'; // <<< add
 import { ethers } from 'ethers';
 import { BlockchainContext } from '../../contexts/BlockchainContext';
 import useIpfsImg from '../../hooks/useIpfsImg'  // adjust path as needed
@@ -231,73 +235,26 @@ async function fetchTokenInstanceMetadata(contractAddr, tokenId, metadataCacheRe
   =  2. On-Chain Fetchers  =
   ==========================
 */
-async function fetchUnstakedNftsWithMultiplier(userAddress, nftStakingContract, signer, metadataCacheRef) {
-  // 1) Query the explorer for all user-owned (unstaked) items
-  const baseUrl = `https://flare-explorer.flare.network/api/v2/addresses/${userAddress}/nft?type=ERC-721`;
-  let currentUrl = baseUrl;
-  const allItems = [];
+async function fetchUnstakedPage(userAddress, nftStakingContract, metadataCacheRef, pageSize, pageIndex) {
+  const offset = (pageIndex - 1) * pageSize;
+  const url =
+    `https://flare-explorer.flare.network/api/v2/addresses/${userAddress}/nft` +
+    `?type=ERC-721&limit=${pageSize}&offset=${offset}`;
 
-  try {
-    while (true) {
-      const resp = await fetchWithRetry(currentUrl, { method: 'GET', headers: { accept: 'application/json' } }, 3);
-      if (!resp.ok) {
-        throw new Error(`Failed to fetch user NFTs (unstaked): HTTP ${resp.status}`);
-      }
-      const data = await resp.json();
-      const items = data.items || [];
-      if (items.length === 0) {
-        break;
-      }
-      allItems.push(...items);
+  const resp = await fetchWithRetry(url, { headers: { accept: 'application/json' } });
+  const items = (await resp.json()).items || [];
 
-      const npp = data.next_page_params;
-      if (!npp) break;
+  const filtered = items.filter(i => 
+    i.token?.address?.toLowerCase() === AUTHORIZED_NFT_CONTRACT
+  );
 
-      const { token_contract_address_hash, token_id, token_type } = npp;
-      if (!token_contract_address_hash || !token_id || !token_type) break;
-
-      currentUrl = `${baseUrl}&token_contract_address_hash=${token_contract_address_hash}&token_id=${token_id}&token_type=${token_type}`;
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    }
-  } catch (err) {
-    console.error('fetchUnstakedNftsWithMultiplier error:', err);
-    return [];
-  }
-
-  // 2) Filter only for AUTHORIZED_NFT_CONTRACT
-  const filtered = allItems.filter((item) => {
-    const cAddr = item.token?.address?.toLowerCase();
-    return cAddr === AUTHORIZED_NFT_CONTRACT;
-  });
-
-  // 3) For each NFT, fetch metadata + on-chain multiplier
-  const results = [];
-  const erc721Abi = ['function tokenMultiplier(uint256) view returns (uint256)'];
-  const readContract = new ethers.Contract(nftStakingContract.address, erc721Abi, signer || nftStakingContract.signer);
-
-  for (const item of filtered) {
-    const tokenId = item.id;
-    try {
-      const instanceData = await fetchTokenInstanceMetadata(AUTHORIZED_NFT_CONTRACT, tokenId, metadataCacheRef);
-
-      const rawMultBN = await readContract.tokenMultiplier(tokenId);
-      const rawMult = rawMultBN ? rawMultBN.toString() : '0';
-      const multiplier = rawMult === '0' ? '1' : rawMult;
-
-      results.push({
-        ...instanceData,
-        multiplier
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    } catch (err) {
-      console.warn(`Error fetching metadata/multiplier for token #${tokenId}`, err);
-    }
-  }
-
-  return results;
+  // fetch metadata in parallel, drop any delays
+  return Promise.all(
+    filtered.map(i =>
+      fetchTokenInstanceMetadata(AUTHORIZED_NFT_CONTRACT, i.id, metadataCacheRef)
+    )
+  );
 }
-
 /* 
   ============================
   =  3. NFT Checkbox + Card  =
@@ -312,7 +269,6 @@ function NFTCheckboxCard({
   selected,
   onSelectChange,
   isStaked = false,
-  multiplier = '0',
   unclaimed = '0'
 }) {
   const { tokenId, image_url, metadata } = nft;
@@ -367,11 +323,6 @@ const {
         <Typography variant="subtitle1" sx={{ color: '#00bfff', mb: 0.5 }} aria-label="NFT name">
           {nftName}
         </Typography>
-        <Tooltip title="Multiplier determines how much reward this NFT receives relative to others.">
-          <Typography variant="body2" sx={{ color: '#ccc' }} aria-label="Multiplier">
-            Multiplier: {multiplier}
-          </Typography>
-        </Tooltip>
         {isStaked && (
           <Tooltip title="Unclaimed rewards for this specific NFT.">
             <Typography variant="body2" sx={{ color: '#ccc' }}>
@@ -430,6 +381,15 @@ export default function NFTStakingPage() {
     if (provider) loadDecimals();
   }, [provider]);
 
+
+  // only call loadData once we know rewardDecimals has been set
+  useEffect(() => {
+    if (!account || !nftStakingContract) return;
+    // rewardDecimals starts at 18, but if your real token is different,
+    // this guarantees we don't load data until after we read the on‑chain decimals.
+    loadData();
+  }, [account, nftStakingContract, rewardDecimals]);
+
   /** helper: BigNumber → float using current token decimals */
   const toFloat = (bn) => parseFloat(ethers.utils.formatUnits(bn || 0, rewardDecimals));
 
@@ -468,9 +428,18 @@ export default function NFTStakingPage() {
   const [unstakedSearchTerm, setUnstakedSearchTerm] = useState('');
   const [stakedSearchTerm, setStakedSearchTerm] = useState('');
 
-  // Sort state: can be 'multiplier', 'name', or 'tokenId'
-  const [unstakedSort, setUnstakedSort] = useState('multiplier');
-  const [stakedSort, setStakedSort] = useState('multiplier');
+   // debounced handler for the unstaked search box
+  const onUnstakedSearchChange = useMemo(
+    () => debounce(val => {
+      setUnstakedSearchTerm(val);
+      setUnstakedPage(1);
+    }, 200),
+    []
+  );
+
+  // Sort state: can be, 'name', or 'tokenId'
+  const [unstakedSort, setUnstakedSort] = useState('tokenId');
+  const [stakedSort, setStakedSort] = useState('tokenId');
 
   // Snackbar
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
@@ -504,41 +473,42 @@ export default function NFTStakingPage() {
       setIsOwner(ownerAddr.toLowerCase() === account.toLowerCase());
 
       // 4) STAKED items
-      const stakedArr = [];
-      for (let i = 0; i < data.stakedTokenIds.length; i++) {
-        const rawId = data.stakedTokenIds[i].toString();
-        const rawMultiplier = data.tokenMultipliers[i].toString();
-        const unclaimedWei = data.tokenUnclaimedRewards[i];
-        const unclaimedEther = ethers.utils.formatUnits(
-          unclaimedWei || '0',
-          rewardDecimals
-        );
+      const stakedArr = await Promise.all(
+        data.stakedTokenIds.map(async (bn, i) => {
+          const tokenId = bn.toString();
+          // 1) Grab the raw BigNumber; default to Zero
+          const unclaimedBn = data.tokenUnclaimedRewards[i] || ethers.constants.Zero;
+          // 2) Format to a JS string, then parse to a float
+          const rawString = ethers.utils.formatUnits(unclaimedBn, rewardDecimals);
+          const unclaimedFloat = parseFloat(rawString);
 
-        const instanceMeta = await fetchTokenInstanceMetadata(
-          AUTHORIZED_NFT_CONTRACT,
-          rawId,
-          metadataCacheRef
-        );
+          // 3) Fetch metadata in parallel
+          const meta = await fetchTokenInstanceMetadata(
+            AUTHORIZED_NFT_CONTRACT,
+            tokenId,
+            metadataCacheRef
+          );
 
-        stakedArr.push({
-          ...instanceMeta,
-          multiplier: rawMultiplier,
-          unclaimed: unclaimedEther
-        });
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      }
-
-      // 5) UNSTAKED items => from explorer
-      const unstakedArr = await fetchUnstakedNftsWithMultiplier(
-        account,
-        nftStakingContract,
-        signer || provider,
-        metadataCacheRef
+          // 4) Return the NFT + **numeric** unclaimed
+          return {
+            ...meta,
+            unclaimed: unclaimedFloat
+          };
+        })
       );
 
-      // 6) Sort both arrays by default => multiplier desc
-      stakedArr.sort((a, b) => Number(b.multiplier) - Number(a.multiplier));
-      unstakedArr.sort((a, b) => Number(b.multiplier) - Number(a.multiplier));
+      // 5) UNSTAKED: fetch only the current page
+      const unstakedArr = await fetchUnstakedPage(
+        account,
+        nftStakingContract,
+        metadataCacheRef,
+        unstakedPageSize,
+        unstakedPage
+      );
+
+      // 6) Sort both arrays by default => 
+      stakedArr.sort((a, b) => Number(b.tokenId) - Number(a.tokenId));
+      unstakedArr.sort((a, b) => Number(b.tokenId) - Number(a.tokenId));
 
       // 7) Update states
       setStakedNfts(stakedArr);
@@ -666,9 +636,9 @@ export default function NFTStakingPage() {
   // Sorting function
   function sortNfts(items, sortBy) {
     const sorted = [...items];
-    if (sortBy === 'multiplier') {
+    if (sortBy === 'tokenId') {
       // desc
-      sorted.sort((a, b) => Number(b.multiplier) - Number(a.multiplier));
+      sorted.sort((a, b) => Number(b.tokenId) - Number(a.tokenId));
     } else if (sortBy === 'name') {
       sorted.sort((a, b) => {
         const nameA = (a.metadata?.name || '').toLowerCase();
@@ -688,8 +658,14 @@ export default function NFTStakingPage() {
   const pagedStaked = paginateItems(sortedStaked, stakedPage, stakedPageSize);
 
   // Deriving unstaked arrays
-  const filteredUnstaked = filterNfts(unstakedNfts, unstakedSearchTerm);
-  const sortedUnstaked = sortNfts(filteredUnstaked, unstakedSort);
+  const filteredUnstaked = useMemo(
+    () => filterNfts(unstakedNfts, unstakedSearchTerm),
+    [unstakedNfts, unstakedSearchTerm]
+  );
+  const sortedUnstaked = useMemo(
+    () => sortNfts(filteredUnstaked, unstakedSort),
+    [filteredUnstaked, unstakedSort]
+  );
   const unstakedTotalPages = Math.ceil(sortedUnstaked.length / unstakedPageSize) || 1;
   const pagedUnstaked = paginateItems(sortedUnstaked, unstakedPage, unstakedPageSize);
 
@@ -702,11 +678,11 @@ export default function NFTStakingPage() {
   const totalSecInEpoch = 365 * 24 * 3600;
 
   if (globalData && userData) {
-    const rawUserMult = userData.userTotalMultiplier;
-    const rawTotalMult = userData.totalMultiplierStaked;
+    const rawUserMult = 1.0;
+    const rawTotalMult = 1.0;
     const rawBaseRate = userData.baseRewardRate;
 
-    if (rawTotalMult && rawTotalMult.gt(0)) {
+    if (rawTotalMult && rawTotalMult) {
       const fraction = Number(rawUserMult.toString()) / Number(rawTotalMult.toString());
       userSharePercent = fraction * 100;
 
@@ -797,14 +773,6 @@ export default function NFTStakingPage() {
       value: userData
         ? toFloat(userData.baseRewardRate).toFixed(10)
         : '0'
-    },
-    {
-      label: 'Total Multiplier Staked',
-      value: userData ? userData.totalMultiplierStaked.toString() : '0'
-    },
-    {
-      label: 'User Multiplier',
-      value: userData ? userData.userTotalMultiplier.toString() : '0'
     },
     {
       label: 'Your $Maid/year',
@@ -974,7 +942,6 @@ export default function NFTStakingPage() {
                       }
                     }}
                   >
-                    <MenuItem value="multiplier">Multiplier</MenuItem>
                     <MenuItem value="name">Name</MenuItem>
                     <MenuItem value="tokenId">Token ID</MenuItem>
                   </Select>
@@ -1032,7 +999,6 @@ export default function NFTStakingPage() {
                         selected={selected}
                         onSelectChange={handleSelectStaked}
                         isStaked
-                        multiplier={item.multiplier}
                         unclaimed={item.unclaimed}
                       />
                     </Grid>
@@ -1076,6 +1042,8 @@ export default function NFTStakingPage() {
             )}
           </Box>
 
+
+
           {/* ==================== UNSTAKED NFTs ==================== */}
           <Box
             sx={{
@@ -1096,10 +1064,7 @@ export default function NFTStakingPage() {
                 variant="outlined"
                 size="small"
                 value={unstakedSearchTerm}
-                onChange={(e) => {
-                  setUnstakedSearchTerm(e.target.value);
-                  setUnstakedPage(1);
-                }}
+                onChange={e => onUnstakedSearchChange(e.target.value)}
                 sx={{ maxWidth: 200, color: '#fff', backgroundColor: '#2a2a2a' }}
                 InputLabelProps={{ style: { color: '#ccc' } }}
               />
@@ -1132,7 +1097,6 @@ export default function NFTStakingPage() {
                       }
                     }}
                   >
-                    <MenuItem value="multiplier">Multiplier</MenuItem>
                     <MenuItem value="name">Name</MenuItem>
                     <MenuItem value="tokenId">Token ID</MenuItem>
                   </Select>
@@ -1176,59 +1140,94 @@ export default function NFTStakingPage() {
               </Box>
             </Box>
 
-            {/* Display unstaked NFTs in a responsive grid */}
+            {/* Display unstaked NFTs with virtualization and skeleton placeholders */}
             {sortedUnstaked.length === 0 ? (
-              <Typography sx={{ color: '#ccc' }}>No unstaked Floor Sweepers found.</Typography>
+              <Typography sx={{ color: '#ccc' }}>
+                No unstaked Floor Sweepers found.
+              </Typography>
             ) : (
-              <Grid container spacing={2} justifyContent="center">
-                {pagedUnstaked.map((item) => {
-                  const selected = selectedToStake.includes(item.tokenId);
-                  return (
-                    <Grid item xs={12} sm={6} md={4} lg={3} key={item.tokenId}>
-                      <NFTCheckboxCard
-                        nft={item}
-                        selected={selected}
-                        onSelectChange={handleSelectUnstaked}
-                        isStaked={false}
-                        multiplier={item.multiplier}
-                      />
-                    </Grid>
-                  );
-                })}
-              </Grid>
+              <Box sx={{ width: '100%', height: 600, overflow: 'hidden' }}>
+                <VirtualGrid
+                  columnCount={4}
+                  columnWidth={280}
+                  height={600}
+                  rowCount={Math.ceil(pagedUnstaked.length / 4)}
+                  rowHeight={320}
+                  width={1120}
+                >
+                  {({ columnIndex, rowIndex, style }) => {
+                    const idx = rowIndex * 4 + columnIndex;
+                    const item = pagedUnstaked[idx];
+
+                    if (!item) {
+                      // Show a skeleton placeholder while metadata loads
+                      return (
+                        <Box key={`skeleton-${rowIndex}-${columnIndex}`} style={style} sx={{ p: 1 }}>
+                          <Skeleton variant="rectangular" width="100%" height={200} />
+                          <Skeleton width="60%" sx={{ mt: 1 }} />
+                        </Box>
+                      );
+                    }
+
+                    const selected = selectedToStake.includes(item.tokenId);
+                    return (
+                      <Box key={item.tokenId} style={style} sx={{ p: 1 }}>
+                        <NFTCheckboxCard
+                          nft={item}
+                          selected={selected}
+                          onSelectChange={handleSelectUnstaked}
+                          isStaked={false}
+                        />
+                      </Box>
+                    );
+                  }}
+                </VirtualGrid>
+              </Box>
             )}
 
-            {/* Pagination + Stake Button */}
-            {sortedUnstaked.length > 0 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mt: 2, flexWrap: 'wrap' }}>
-                <Button
-                  variant="outlined"
-                  disabled={unstakedPage <= 1}
-                  onClick={() => setUnstakedPage((prev) => prev - 1)}
-                  sx={{ color: '#fff', borderColor: '#00bfff' }}
+            {/* Display staked NFTs with virtualization and skeleton placeholders */}
+            {sortedStaked.length === 0 ? (
+              <Typography sx={{ color: '#ccc' }}>
+                No staked Floor Sweepers found.
+              </Typography>
+            ) : (
+              <Box sx={{ width: '100%', height: 600, overflow: 'hidden' }}>
+                <VirtualGrid
+                  columnCount={4}
+                  columnWidth={280}
+                  height={600}
+                  rowCount={Math.ceil(pagedStaked.length / 4)}
+                  rowHeight={320}
+                  width={1120}
                 >
-                  Prev
-                </Button>
-                <Typography sx={{ color: '#fff' }}>
-                  Page {unstakedPage} of {unstakedTotalPages}
-                </Typography>
-                <Button
-                  variant="outlined"
-                  disabled={unstakedPage >= unstakedTotalPages}
-                  onClick={() => setUnstakedPage((prev) => prev + 1)}
-                  sx={{ color: '#fff', borderColor: '#00bfff' }}
-                >
-                  Next
-                </Button>
+                  {({ columnIndex, rowIndex, style }) => {
+                    const idx = rowIndex * 4 + columnIndex;
+                    const item = pagedStaked[idx];
 
-                <Button
-                  variant="contained"
-                  sx={{ ml: 'auto', backgroundColor: '#00bfff', color: '#fff' }}
-                  onClick={handleBatchStake}
-                  disabled={loadingBatch}
-                >
-                  {loadingBatch ? 'Processing...' : 'Stake Selected'}
-                </Button>
+                    if (!item) {
+                      // skeleton while we wait for a card
+                      return (
+                        <Box key={`skeleton-staked-${rowIndex}-${columnIndex}`} style={style} sx={{ p: 1 }}>
+                          <Skeleton variant="rectangular" width="100%" height={200} />
+                          <Skeleton width="60%" sx={{ mt: 1 }} />
+                        </Box>
+                      );
+                    }
+
+                    const selected = selectedToUnstake.includes(item.tokenId);
+                    return (
+                      <Box key={item.tokenId} style={style} sx={{ p: 1 }}>
+                        <NFTCheckboxCard
+                          nft={item}
+                          selected={selected}
+                          onSelectChange={handleSelectStaked}
+                          isStaked
+                          unclaimed={item.unclaimed}
+                        />
+                      </Box>
+                    );
+                  }}
+                </VirtualGrid>
               </Box>
             )}
           </Box>
